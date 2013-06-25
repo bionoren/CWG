@@ -111,11 +111,13 @@ int nextWord(DictionaryManager *mgr, char *outWord) {
     //else drop back until there are unexplored children
     if(item->index == 0) {
         do {
-            for(item->childLetterFormatOffset++; item->childLetterFormatOffset < NUMBER_OF_ENGLISH_LETTERS; item->childLetterFormatOffset++) {
-                if(item->childListFormat & PowersOfTwo[item->childLetterFormatOffset]) {
-                    ++item->childLetterIndexOffset;
-                    goto LOOP_END;
-                }
+            unsigned int offset = ffs(item->childListFormat);
+            if(offset != 0) {
+                item->childListFormat >>= offset;
+                item->childLetterFormatOffset += offset;
+                assert(item->childLetterFormatOffset <= 'z');
+                ++item->index;
+                goto LOOP_END;
             }
             item--;
         } while(--(mgr->stackDepth) >= 0);
@@ -128,34 +130,38 @@ LOOP_END:;
     int node;
     do {
         //get the node
-        node = nodeArray[item->index + item->childLetterIndexOffset];
+        node = nodeArray[item->index];
 
         //store the letter and go down
-        mgr->tmpWord[(mgr->stackDepth)++] = 'a' + item->childLetterFormatOffset;
+        mgr->tmpWord[mgr->stackDepth++] = item->childLetterFormatOffset;
         assert(mgr->stackDepth <= WORD_LENGTH);
 
         //setup the next node
         item++;
         item->index = node & CHILD_MASK;
-        item->childLetterIndexOffset = 0;
-        item->childLetterFormatOffset = 0;
 
-        bool extendedList = node & EXTENDED_LIST_FLAG;
         int childListFormat = listFormatArray[(node & LIST_FORMAT_INDEX_MASK) >> LIST_FORMAT_BIT_SHIFT];
-        childListFormat += extendedList << (childListFormat >> NUMBER_OF_ENGLISH_LETTERS);
-        item->childListFormat = childListFormat;
+        if(node & EXTENDED_LIST_FLAG) {
+            childListFormat += 1 << (childListFormat >> NUMBER_OF_ENGLISH_LETTERS);
+        }
+        item->childListFormat = childListFormat & 0x03FFFFFF;
 
         //seek to the first letter in the list
-        for(; item->childLetterFormatOffset < NUMBER_OF_ENGLISH_LETTERS && !(item->childListFormat & PowersOfTwo[item->childLetterFormatOffset]); item->childLetterFormatOffset++);
+        char offset = (char)ffs(item->childListFormat);
+        item->childLetterFormatOffset = offset + 'a' - 1;
+        item->childListFormat >>= offset;
+        assert(item->childLetterFormatOffset <= 'z');
     } while(!(node & EOW_FLAG));
 
     assert(mgr->stackDepth > 1 && mgr->stackDepth <= WORD_LENGTH);
-    strncpy(outWord, mgr->tmpWord, mgr->stackDepth);
+    for(int i = 0; i < WORD_LENGTH; i++) {
+        outWord[i] = mgr->tmpWord[i];
+    }
     //NSLog(@"Evaluating %.*s", length, tmpWord);
 
 #if HASH_DEBUG
-    assert(hashWord(outWord, mgr->stackDepth) == ++(mgr->lastHash));
-    assert(isValidWord(outWord, mgr->stackDepth));
+    assert(hashWord(outWord - WORD_LENGTH, mgr->stackDepth) == ++(mgr->lastHash));
+    assert(isValidWord(outWord - WORD_LENGTH, mgr->stackDepth));
 #endif
     int ret = mgr->stackDepth;
     OSSpinLockUnlock(&mgr->lock);
@@ -171,9 +177,8 @@ void resetManager(DictionaryManager *mgr) {
     printf("Reseting dictionary iterator...\n");
 #endif
     mgr->stack[0].index = 1;
-    mgr->stack[0].childLetterIndexOffset = 0;
-    mgr->stack[0].childLetterFormatOffset = 0;
-    mgr->stack[0].childListFormat = 0xFFFFFFFF;
+    mgr->stack[0].childLetterFormatOffset = 'a';
+    mgr->stack[0].childListFormat = 0x01FFFFFF;
     mgr->stackDepth = 0;
 #if HASH_DEBUG
     mgr->lastHash = 0;
